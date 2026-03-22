@@ -1,0 +1,24 @@
+{
+  "gateway": {
+    "url": "http://localhost:18789",
+    "token": "<your-gateway-token>"
+  },
+  "telegram": {
+    "group_chat_id": "<your-group-chat-id>",
+    "bots": {
+      "private-bot": {"token": "<your-token>"},
+      "leader": {"token": "<your-token>"},
+      "coder": {"token": "<your-token>"},
+      "reviewer": {"token": "<your-token>"},
+      "researcher": {"token": "<your-token>"},
+      "analyst": {"token": "<your-token>"},
+      "architect": {"token": "<your-token>"}
+    }
+  },
+  "dispatcher": {
+    "model": "kimi-coding/k2p5",
+    "max_steps": 5,
+    "step_timeout_seconds": 120,
+    "max_context_bytes": 153600
+  }
+}

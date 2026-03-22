@@ -36,15 +36,22 @@ class TelegramDisplay:
 
     def send(self, role, text, dry_run=False):
         """Send message to group chat using the specified role's bot token.
-        Falls back to 'leader' token if role token not found.
+        Falls back to 'leader' token if role token not found or send fails.
         """
         if dry_run:
             print(f"[{role}] {text}")
             return True
 
-        token = self.bot_tokens.get(role) or self.bot_tokens.get("leader")
+        token = self.bot_tokens.get(role)
+        leader_token = self.bot_tokens.get("leader")
+
         if not token or token == "TODO":
-            print(f"[DRY-{role}] {text}")
+            token = leader_token
+            if role not in ("leader", "private-bot"):
+                text = f"[{role.capitalize()}] {text}"
+
+        if not token:
+            print(f"[NO-TOKEN-{role}] {text}")
             return False
 
         try:
@@ -53,6 +60,14 @@ class TelegramDisplay:
                 json={"chat_id": self.group_chat_id, "text": text},
                 timeout=10,
             )
+            if not resp.ok and token != leader_token and leader_token:
+                # Role bot failed (not in group?), fallback to leader
+                fallback_text = f"[{role.capitalize()}] {text}"
+                resp = requests.post(
+                    self.TELEGRAM_API.format(token=leader_token),
+                    json={"chat_id": self.group_chat_id, "text": fallback_text},
+                    timeout=10,
+                )
             return resp.ok
         except requests.RequestException:
             return False

@@ -9,13 +9,42 @@ ROLE_RULES = [
     ("architect", re.compile(r"设计|架构|方案|规划|design")),
 ]
 
+# Patterns that suggest multi-step: "do X then Y", "X后Y", "X完Y"
+MULTI_STEP_PATTERNS = [
+    re.compile(r"然后|之后|接着|再|完了|完后|写完后|做完后|, ?then"),
+]
+
 DEFAULT_ROLE = "coder"
 
 
 def fallback_dispatch(user_message):
-    """Return a single-step dispatch plan based on keyword matching.
-    Returns: {"role": str, "task": str, "fallback": True}
+    """Return dispatch plan based on keyword matching.
+    Detects multi-step patterns like "写代码然后review".
+    Returns: single dict or list of dicts with role/task/fallback keys.
     """
+    # Check if message contains multi-step indicators
+    has_multi_step = any(p.search(user_message) for p in MULTI_STEP_PATTERNS)
+
+    if has_multi_step:
+        # Find ALL matching roles in order of appearance in text
+        matched_roles = []
+        for role, pattern in ROLE_RULES:
+            match = pattern.search(user_message)
+            if match:
+                matched_roles.append((match.start(), role))
+
+        if len(matched_roles) >= 2:
+            # Sort by position in text to get natural order
+            matched_roles.sort(key=lambda x: x[0])
+            seen = set()
+            steps = []
+            for _, role in matched_roles:
+                if role not in seen:
+                    seen.add(role)
+                    steps.append({"role": role, "task": user_message, "fallback": True})
+            return steps
+
+    # Single step: first match wins
     for role, pattern in ROLE_RULES:
         if pattern.search(user_message):
             return {"role": role, "task": user_message, "fallback": True}

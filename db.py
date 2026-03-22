@@ -44,16 +44,16 @@ class Database:
         date_str = now.strftime("%Y%m%d")
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM tasks WHERE task_id LIKE ?",
+                "SELECT MAX(CAST(SUBSTR(task_id, -3) AS INTEGER)) as max_seq FROM tasks WHERE task_id LIKE ?",
                 (f"AT-{date_str}-%",)
             ).fetchone()
-            seq = (row["c"] or 0) + 1
+            seq = (row["max_seq"] or 0) + 1
         return f"AT-{date_str}-{seq:03d}"
 
     def create_task(self, task_id, user_message, dispatch_plan=None):
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO tasks (task_id, user_message, dispatch_plan) VALUES (?, ?, ?)",
+                "INSERT OR REPLACE INTO tasks (task_id, user_message, dispatch_plan) VALUES (?, ?, ?)",
                 (task_id, user_message, dispatch_plan)
             )
         return task_id

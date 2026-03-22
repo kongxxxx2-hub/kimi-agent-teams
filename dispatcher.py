@@ -16,21 +16,14 @@ from telegram_display import TelegramDisplay
 
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
 
-ANALYSIS_PROMPT = """你是一个任务分析器。分析用户的任务，输出一个 JSON 分派计划。
+ANALYSIS_PROMPT = """你是一个 JSON 任务分析器。你只输出 JSON，绝对不输出任何其他文字。
 
-规则：
-- 拆分为 1-5 个步骤
-- 每个步骤指定一个角色: coder, reviewer, researcher, analyst, architect
-- 步骤按执行顺序排列
-- 如果任务提到文件路径，放在 context_files 数组里
+分析用户任务，拆分为步骤，每步指定角色。
 
-只输出 JSON，不要其他文字。格式：
-{
-  "summary": "一句话总结任务",
-  "steps": [
-    {"role": "coder", "task": "具体任务描述", "context_files": ["/path/to/file"]}
-  ]
-}"""
+角色只有这5个: coder, reviewer, researcher, analyst, architect
+
+直接输出以下格式的JSON（不要markdown代码块，不要解释）：
+{"summary":"一句话总结","steps":[{"role":"coder","task":"具体描述"}]}"""
 
 
 class Dispatcher:
@@ -114,16 +107,22 @@ class Dispatcher:
         """Use k2p5 to analyze task and create dispatch plan. Falls back to keywords."""
         result = self.client.call(ANALYSIS_PROMPT, user_message)
 
-        if result["status"] == "completed":
+        if result["status"] == "completed" and result["text"]:
             plan = self.parse_dispatch_plan(result["text"])
             if plan:
                 return plan, False  # (plan, is_fallback)
+            # Log parse failure for debugging
+            print(f"[dispatcher] k2p5 分析返回但JSON解析失败, 前200字: {result['text'][:200]}", file=sys.stderr)
 
         # Fallback
-        step = fallback_dispatch(user_message)
+        fallback_result = fallback_dispatch(user_message)
+        if isinstance(fallback_result, list):
+            steps = fallback_result
+        else:
+            steps = [fallback_result]
         return {
             "summary": user_message[:50],
-            "steps": [step],
+            "steps": steps,
         }, True
 
     def execute(self, user_message):

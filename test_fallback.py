@@ -15,6 +15,8 @@ def test_reviewer_keywords():
 def test_researcher_keywords():
     assert fallback_dispatch("搜索一下涨停板规则")["role"] == "researcher"
     assert fallback_dispatch("调研竞品方案")["role"] == "researcher"
+    assert fallback_dispatch("了解一下CPO趋势")["role"] == "researcher"
+    assert fallback_dispatch("最近光模块消息")["role"] == "researcher"
 
 
 def test_analyst_keywords():
@@ -26,20 +28,25 @@ def test_architect_keywords():
     assert fallback_dispatch("设计系统架构")["role"] == "architect"
 
 
-def test_default_to_coder():
-    assert fallback_dispatch("你好")["role"] == "coder"
-    assert fallback_dispatch("随便做点什么")["role"] == "coder"
+def test_default_to_researcher():
+    # Default changed from coder to researcher
+    assert fallback_dispatch("你好")["role"] == "researcher"
 
 
-def test_first_match_wins_single():
-    # pure coder task, no multi-step pattern
+def test_enriched_task():
+    # Researcher tasks should be enriched with detailed instructions
+    result = fallback_dispatch("调研一下CPO产业")
+    assert "3000 字以上" in result["task"]
+    assert "核心结论" in result["task"]
+    assert "CPO产业" in result["task"]
+
+
+def test_coder_not_enriched():
     result = fallback_dispatch("写一个选股脚本")
-    assert isinstance(result, dict)
-    assert result["role"] == "coder"
+    assert result["task"] == "写一个选股脚本"
 
 
 def test_multi_step_detection():
-    # "然后" triggers multi-step: coder first (写), then reviewer (review)
     result = fallback_dispatch("写代码然后review")
     assert isinstance(result, list)
     assert len(result) == 2
@@ -47,21 +54,13 @@ def test_multi_step_detection():
     assert result[1]["role"] == "reviewer"
 
 
-def test_multi_step_three_roles():
-    result = fallback_dispatch("写代码然后review然后分析")
+def test_multi_step_enriched():
+    result = fallback_dispatch("调研CPO然后分析投资价值")
     assert isinstance(result, list)
-    assert len(result) == 3
-    assert result[0]["role"] == "coder"
-    assert result[1]["role"] == "reviewer"
-    assert result[2]["role"] == "analyst"
-
-
-def test_multi_step_with_after():
-    result = fallback_dispatch("写完后让reviewer审查")
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert result[0]["role"] == "coder"
-    assert result[1]["role"] == "reviewer"
+    assert result[0]["role"] == "researcher"
+    assert "3000 字以上" in result[0]["task"]
+    assert result[1]["role"] == "analyst"
+    assert "评分矩阵" in result[1]["task"]
 
 
 if __name__ == "__main__":
@@ -70,9 +69,9 @@ if __name__ == "__main__":
     test_researcher_keywords()
     test_analyst_keywords()
     test_architect_keywords()
-    test_default_to_coder()
-    test_first_match_wins_single()
+    test_default_to_researcher()
+    test_enriched_task()
+    test_coder_not_enriched()
     test_multi_step_detection()
-    test_multi_step_three_roles()
-    test_multi_step_with_after()
+    test_multi_step_enriched()
     print("All fallback tests passed")

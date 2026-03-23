@@ -18,6 +18,21 @@ from telegram_display import TelegramDisplay
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
 OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
+MAX_REVIEW_ROUNDS = 2
+
+LEADER_REVIEW_PROMPT = """你是 Leader，负责审核团队的产出质量。
+
+评估以下产出是否达标：
+1. 完整性：是否覆盖了用户要求的所有方面
+2. 深度：分析是否足够深入，有数据支撑
+3. 准确性：信息是否准确，逻辑是否自洽
+4. 可读性：结构是否清晰，格式是否规范
+
+只输出 JSON：
+{"verdict":"pass","feedback":"评价"}
+或
+{"verdict":"revise","feedback":"需要补充XX方面的分析","target_role":"researcher"}"""
+
 ANALYSIS_PROMPT = """你是一个 JSON 任务分析器。你只输出 JSON，绝对不输出任何其他文字。
 
 分析用户任务，拆分为步骤，每步指定角色。
@@ -104,6 +119,109 @@ class Dispatcher:
             with open(path, "r") as f:
                 return f.read()
         return f"你是 {role}，请完成用户给你的任务。"
+
+    def _leader_review(self, task_id, plan, combined_output):
+        """Leader reviews combined output. Returns (passed, revised_steps_output)."""
+        original_request = plan.get("_original_message", plan.get("summary", ""))
+
+        for review_round in range(1, MAX_REVIEW_ROUNDS + 1):
+            review_input = (
+                f"原始任务: {original_request}\n\n"
+                f"计划: {json.dumps(plan.get('steps', []), ensure_ascii=False)}\n\n"
+                f"团队产出:\n{combined_output}"
+            )
+
+            result = self.client.call(LEADER_REVIEW_PROMPT, review_input)
+
+            if result["status"] != "completed" or not result["text"]:
+                self.display.send("leader",
+                    f"🔄 审核 (第{review_round}轮): API 调用失败，视为通过",
+                    dry_run=self.dry_run)
+                return True, combined_output
+
+            # Parse review JSON
+            json_match = re.search(r'\{[\s\S]*\}', result["text"])
+            if not json_match:
+                self.display.send("leader",
+                    f"🔄 审核 (第{review_round}轮): 解析失败，视为通过",
+                    dry_run=self.dry_run)
+                return True, combined_output
+
+            try:
+                review = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                self.display.send("leader",
+                    f"🔄 审核 (第{review_round}轮): JSON 解析失败，视为通过",
+                    dry_run=self.dry_run)
+                return True, combined_output
+
+            verdict = review.get("verdict", "pass")
+            feedback = review.get("feedback", "")
+
+            if verdict == "pass":
+                self.display.send("leader",
+                    f"✅ 审核通过 (第{review_round}轮): {feedback[:100]}",
+                    dry_run=self.dry_run)
+                return True, combined_output
+
+            # verdict == "revise"
+            target_role = review.get("target_role", "researcher")
+            if target_role not in VALID_ROLES:
+                target_role = "researcher"
+
+            self.display.send("leader",
+                f"🔄 审核 (第{review_round}轮): 需要 {target_role} 修订 — {feedback[:100]}",
+                dry_run=self.dry_run)
+
+            # Find the original task for this role
+            original_task = ""
+            for step in plan.get("steps", []):
+                if step["role"] == target_role:
+                    original_task = step["task"]
+                    break
+            if not original_task:
+                original_task = plan.get("summary", "")
+
+            # Re-run the target role with feedback
+            revision_input = (
+                f"任务: {original_task}\n\n"
+                f"Leader 审核反馈 (第{review_round}轮修订):\n{feedback}\n\n"
+                f"你之前的产出:\n{combined_output}\n\n"
+                f"请根据反馈修订和补充你的产出。"
+            )
+            system_prompt = self.load_role_prompt(target_role)
+            revision_result = self.client.call(system_prompt, revision_input)
+
+            # Record revision step
+            step_order = len(self.db.get_steps(task_id)) + 1
+            self.db.create_step(
+                task_id, step_order, target_role, revision_input,
+                revision_result["text"],
+                revision_result.get("tokens", 0),
+                revision_result.get("duration_ms", 0),
+                revision_result["status"]
+            )
+
+            if revision_result["status"] != "completed" or not revision_result["text"]:
+                self.display.send("leader",
+                    f"❌ {target_role} 修订失败，使用原始产出",
+                    dry_run=self.dry_run)
+                return False, combined_output
+
+            # Send revision summary
+            rev_lines = revision_result["text"].strip().split("\n")
+            rev_summary = rev_lines[-1] if rev_lines else revision_result["text"][:100]
+            self.display.send(target_role,
+                f"🔄 修订完成 — {rev_summary[:100]}",
+                dry_run=self.dry_run)
+
+            combined_output = revision_result["text"]
+
+        # Exhausted review rounds
+        self.display.send("leader",
+            f"⚠️ 已达最大修订轮数 ({MAX_REVIEW_ROUNDS})，使用最新产出",
+            dry_run=self.dry_run)
+        return False, combined_output
 
     def analyze_task(self, user_message):
         """Use k2p5 to analyze task and create dispatch plan. Falls back to keywords."""
@@ -199,10 +317,20 @@ class Dispatcher:
             previous_output = result["text"]
             completed_steps += 1
 
-        # 3. Save output to file
+        # 3. Leader review loop
+        if final_status == "completed" and previous_output:
+            plan["_original_message"] = user_message
+            self.display.send("leader", "🔍 Leader 开始审核产出...", dry_run=self.dry_run)
+            review_passed, previous_output = self._leader_review(
+                task_id, plan, previous_output
+            )
+            if not review_passed:
+                final_status = "completed"  # still completed, just with revisions
+
+        # 4. Save output to file
         output_path = self._save_output(task_id, plan, completed_steps)
 
-        # 4. Finalize
+        # 5. Finalize
         self.db.update_task_status(task_id, final_status)
 
         end_msg = self.display.format_task_end(task_id, final_status, completed_steps)

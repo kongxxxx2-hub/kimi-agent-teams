@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 from db import Database
 from gateway_client import GatewayClient
@@ -15,6 +16,7 @@ from fallback import fallback_dispatch
 from telegram_display import TelegramDisplay
 
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
+OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
 ANALYSIS_PROMPT = """你是一个 JSON 任务分析器。你只输出 JSON，绝对不输出任何其他文字。
 
@@ -197,18 +199,100 @@ class Dispatcher:
             previous_output = result["text"]
             completed_steps += 1
 
-        # 3. Finalize
+        # 3. Save output to file
+        output_path = self._save_output(task_id, plan, completed_steps)
+
+        # 4. Finalize
         self.db.update_task_status(task_id, final_status)
-        self.display.send("leader", self.display.format_task_end(
-            task_id, final_status, completed_steps
-        ), dry_run=self.dry_run)
+
+        end_msg = self.display.format_task_end(task_id, final_status, completed_steps)
+        if output_path:
+            end_msg += f"\n📁 {output_path}"
+        self.display.send("leader", end_msg, dry_run=self.dry_run)
 
         return {
             "task_id": task_id,
             "status": final_status,
             "steps_completed": completed_steps,
             "final_output": previous_output,
+            "output_path": output_path,
         }
+
+    def _save_output(self, task_id, plan, completed_steps):
+        """Save full task output as a markdown file."""
+        if completed_steps == 0:
+            return None
+
+        steps = self.db.get_steps(task_id)
+        if not steps:
+            return None
+
+        # Build markdown
+        summary = plan.get("summary", task_id)
+        lines = [f"# {summary}\n"]
+        lines.append(f"**任务ID**: {task_id}")
+        lines.append(f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        lines.append(f"**步骤数**: {completed_steps}\n")
+
+        role_emoji = {"coder": "👨‍💻", "reviewer": "🔍", "researcher": "🔎",
+                      "analyst": "📊", "architect": "🏗️"}
+
+        for s in steps:
+            if s["status"] != "completed" or not s["output"]:
+                continue
+            emoji = role_emoji.get(s["role"], "🤖")
+            lines.append(f"---\n\n## {emoji} {s['role'].capitalize()}\n")
+            lines.append(s["output"])
+            lines.append("")
+
+        # Write file
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        # Clean summary for filename
+        safe_name = re.sub(r'[^\w\u4e00-\u9fff-]', '_', summary)[:30].strip('_')
+        filename = f"{task_id}_{safe_name}.md"
+        filepath = os.path.join(OUTPUT_DIR, filename)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        # Generate PDF
+        pdf_path = self._md_to_pdf(filepath)
+
+        return pdf_path or filepath
+
+    def _md_to_pdf(self, md_path):
+        """Convert markdown file to PDF. Returns PDF path or None."""
+        try:
+            import markdown
+            os.environ.setdefault("DYLD_LIBRARY_PATH", "/opt/homebrew/lib")
+            from weasyprint import HTML
+
+            with open(md_path, encoding="utf-8") as f:
+                md_text = f.read()
+
+            html_body = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+            html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+body {{ font-family: "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 13px; line-height: 1.6; margin: 2cm; color: #333; }}
+h1 {{ color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }}
+h2 {{ color: #2c3e50; margin-top: 1.5em; }}
+h3 {{ color: #34495e; }}
+table {{ border-collapse: collapse; width: 100%; margin: 1em 0; }}
+th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+th {{ background: #f5f5f5; font-weight: bold; }}
+tr:nth-child(even) {{ background: #fafafa; }}
+code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
+pre {{ background: #f8f8f8; padding: 12px; border-radius: 6px; overflow-x: auto; }}
+blockquote {{ border-left: 4px solid #3498db; margin: 1em 0; padding: 0.5em 1em; background: #f0f7ff; }}
+</style></head><body>{html_body}</body></html>"""
+
+            pdf_path = md_path.replace(".md", ".pdf")
+            HTML(string=html).write_pdf(pdf_path)
+            return pdf_path
+        except Exception as e:
+            print(f"[dispatcher] PDF 生成失败: {e}", file=sys.stderr)
+            return None
 
 
 def main():

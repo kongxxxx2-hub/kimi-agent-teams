@@ -20,18 +20,23 @@ OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
 MAX_REVIEW_ROUNDS = 2
 
-LEADER_REVIEW_PROMPT = """你是 Leader，负责审核团队的产出质量。
+LEADER_REVIEW_PROMPT = """你是严格的审稿人。你的职责是找出产出中的不足，而不是夸奖。
 
-评估以下产出是否达标：
+审核标准（每项 1-10 分）：
 1. 完整性：是否覆盖了用户要求的所有方面
-2. 深度：分析是否足够深入，有数据支撑
-3. 准确性：信息是否准确，逻辑是否自洽
-4. 可读性：结构是否清晰，格式是否规范
+2. 深度：分析是否有具体数据支撑，不是泛泛而谈
+3. 准确性：信息是否准确，逻辑链是否完整（论据→论点→结论）
+4. 可操作性：结论是否具体可执行，不是空话
+
+规则：
+- 你必须找出至少 2 个可以改进的地方
+- 如果任一项低于 7 分，verdict 必须是 revise
+- 只有四项都 >= 7 分才能 pass
 
 只输出 JSON：
-{"verdict":"pass","feedback":"评价"}
+{"verdict":"pass","scores":{"完整性":8,"深度":7,"准确性":8,"可操作性":7},"issues":["问题1","问题2"],"feedback":"总体评价"}
 或
-{"verdict":"revise","feedback":"需要补充XX方面的分析","target_role":"researcher"}"""
+{"verdict":"revise","scores":{"完整性":6,"深度":5,"准确性":7,"可操作性":6},"issues":["问题1","问题2"],"feedback":"需要补充的内容","target_role":"researcher"}"""
 
 ANALYSIS_PROMPT = """你是一个 JSON 任务分析器。你只输出 JSON，绝对不输出任何其他文字。
 
@@ -402,17 +407,22 @@ class Dispatcher:
             html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
-body {{ font-family: "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 13px; line-height: 1.6; margin: 2cm; color: #333; }}
-h1 {{ color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }}
-h2 {{ color: #2c3e50; margin-top: 1.5em; }}
-h3 {{ color: #34495e; }}
-table {{ border-collapse: collapse; width: 100%; margin: 1em 0; }}
-th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+@font-face {{
+    font-family: "CJK";
+    src: local("Hiragino Sans GB"), local("Heiti SC"), local("STHeiti");
+}}
+body {{ font-family: "CJK", "Hiragino Sans GB", "Heiti SC", "STHeiti", sans-serif; font-size: 12px; line-height: 1.8; margin: 2cm; color: #333; }}
+h1 {{ font-family: "CJK", "Hiragino Sans GB", "Heiti SC", sans-serif; color: #1a1a1a; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; font-size: 22px; }}
+h2 {{ font-family: "CJK", "Hiragino Sans GB", "Heiti SC", sans-serif; color: #2c3e50; margin-top: 1.5em; font-size: 18px; }}
+h3 {{ font-family: "CJK", "Hiragino Sans GB", "Heiti SC", sans-serif; color: #34495e; font-size: 15px; }}
+table {{ border-collapse: collapse; width: 100%; margin: 1em 0; font-family: "CJK", "Hiragino Sans GB", "Heiti SC", sans-serif; }}
+th, td {{ border: 1px solid #ddd; padding: 6px 8px; text-align: left; font-size: 11px; }}
 th {{ background: #f5f5f5; font-weight: bold; }}
 tr:nth-child(even) {{ background: #fafafa; }}
-code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
-pre {{ background: #f8f8f8; padding: 12px; border-radius: 6px; overflow-x: auto; }}
+code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 11px; }}
+pre {{ background: #f8f8f8; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 11px; }}
 blockquote {{ border-left: 4px solid #3498db; margin: 1em 0; padding: 0.5em 1em; background: #f0f7ff; }}
+strong {{ font-family: "CJK", "Hiragino Sans GB", "Heiti SC", sans-serif; }}
 </style></head><body>{html_body}</body></html>"""
 
             pdf_path = md_path.replace(".md", ".pdf")

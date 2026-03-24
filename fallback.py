@@ -14,6 +14,9 @@ MULTI_STEP_PATTERNS = [
     re.compile(r"然后|之后|接着|再|完了|完后|写完后|做完后|, ?then"),
 ]
 
+# Keywords that imply deep work → auto-trigger researcher + analyst (2-step)
+DEEP_WORK_KEYWORDS = re.compile(r"深入|深度|综合|全面|详细|产业链|竞争格局|投资|估值|对比分析|评估.*价值|分析.*趋势")
+
 DEFAULT_ROLE = "researcher"  # 默认用 researcher 而不是 coder
 
 # Role-specific task enrichment templates
@@ -76,8 +79,16 @@ def fallback_dispatch(user_message):
     Detects multi-step patterns like "写代码然后review".
     Returns: single dict or list of dicts with role/task/fallback keys.
     """
-    # Check if message contains multi-step indicators
+    # Check if message contains multi-step indicators or deep work keywords
     has_multi_step = any(p.search(user_message) for p in MULTI_STEP_PATTERNS)
+    has_deep_work = bool(DEEP_WORK_KEYWORDS.search(user_message))
+
+    # Deep work keywords auto-trigger researcher + analyst
+    if has_deep_work and not has_multi_step:
+        return [
+            {"role": "researcher", "task": _enrich_task("researcher", user_message), "fallback": True},
+            {"role": "analyst", "task": _enrich_task("analyst", user_message), "fallback": True},
+        ]
 
     if has_multi_step:
         # Find ALL matching roles in order of appearance in text

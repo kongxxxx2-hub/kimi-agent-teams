@@ -86,6 +86,11 @@ class TelegramListener:
                 },
                 timeout=35,
             )
+            if resp.status_code == 409:
+                # Another process is polling this bot. Wait and retry.
+                print("[listener] 409 Conflict - waiting 35s for other poller to release...", file=sys.stderr)
+                time.sleep(35)
+                return []
             resp.raise_for_status()
             data = resp.json()
             if data.get("ok"):

@@ -271,25 +271,7 @@ class Dispatcher:
                     dry_run=self.dry_run)
                 return True, combined_output
 
-            try:
-                review = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                self.display.send("leader",
-                    f"🔄 审核 (第{review_round}轮): JSON 解析失败，视为通过",
-                    dry_run=self.dry_run)
-                return True, combined_output
-
-            verdict = review.get("verdict", "pass")
-            feedback = review.get("feedback", "")
-
-            if verdict == "pass":
-                self.display.send("leader",
-                    f"✅ 审核通过 (第{review_round}轮): {feedback[:100]}",
-                    dry_run=self.dry_run)
-                return True, combined_output
-
             # verdict == "revise"
-            target_role = review.get("target_role", "researcher")
             if target_role not in VALID_ROLES:
                 target_role = "researcher"
 

@@ -33,6 +33,8 @@ class TelegramListener:
             self.config = json.load(f)
 
         self.leader_token = self.config["telegram"]["bots"]["leader"]["token"]
+        # Leader bot is no longer polled by clawdbot (binding removed), so we can use it directly
+        self.poll_token = self.leader_token
         self.group_chat_id = int(self.config["telegram"]["group_chat_id"])
         self.once = once
         self.dry_run = dry_run
@@ -59,7 +61,7 @@ class TelegramListener:
         """Poll Telegram Bot API for new messages."""
         try:
             resp = requests.get(
-                f"{TELEGRAM_API.format(token=self.leader_token)}/getUpdates",
+                f"{TELEGRAM_API.format(token=self.poll_token)}/getUpdates",
                 params={
                     "offset": self.offset,
                     "timeout": 30,

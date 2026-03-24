@@ -96,13 +96,31 @@ class Dispatcher:
 
         gw = self.config["gateway"]
         disp = self.config["dispatcher"]
-        self.client = GatewayClient(gw["url"], gw["token"], disp["model"], disp["step_timeout_seconds"])
         self.max_steps = disp["max_steps"]
         self.max_context_bytes = disp["max_context_bytes"]
+        timeout = disp["step_timeout_seconds"]
+
+        # Per-role gateway clients with separate API keys (model names)
+        self.role_models = {
+            "researcher": "kimi-researcher/k2p5",
+            "analyst": "kimi-analyst/k2p5",
+            "reviewer": "kimi-reviewer/k2p5",
+            "leader": "kimi-leader/k2p5",
+            "coder": disp["model"],
+            "architect": disp["model"],
+        }
+        self.clients = {}
+        for role, model in self.role_models.items():
+            self.clients[role] = GatewayClient(gw["url"], gw["token"], model, timeout)
+        self.client = self.clients.get("researcher")  # default fallback
 
         bot_tokens = {name: info["token"] for name, info in self.config["telegram"]["bots"].items()}
         group_id = self.config["telegram"]["group_chat_id"]
         self.display = TelegramDisplay(bot_tokens, group_id)
+
+    def _client_for(self, role):
+        """Get the gateway client for a specific role."""
+        return self.clients.get(role, self.client)
 
     def parse_dispatch_plan(self, raw_text):
         """Parse k2p5's response into a dispatch plan. Supports both JSON and natural language format."""
@@ -208,7 +226,7 @@ class Dispatcher:
             if hard_issues and review_round == 1:
                 review_input += f"\n\n系统检测到的问题：\n" + "\n".join(f"- {i}" for i in hard_issues)
 
-            result = self.client.call(LEADER_REVIEW_PROMPT, review_input)
+            result = self._client_for("leader").call(LEADER_REVIEW_PROMPT, review_input)
 
             if result["status"] != "completed" or not result["text"]:
                 # API failed — if hard rules passed, accept; otherwise revise
@@ -295,7 +313,7 @@ class Dispatcher:
                 f"请根据反馈修订和补充你的产出。"
             )
             system_prompt = self.load_role_prompt(target_role)
-            revision_result = self.client.call(system_prompt, revision_input)
+            revision_result = self._client_for(target_role).call(system_prompt, revision_input)
 
             # Record revision step
             step_order = len(self.db.get_steps(task_id)) + 1
@@ -387,8 +405,8 @@ class Dispatcher:
             role_input = "\n\n".join(role_input_parts)
             system_prompt = self.load_role_prompt(role)
 
-            # Call API
-            result = self.client.call(system_prompt, role_input)
+            # Call API (role-specific API key)
+            result = self._client_for(role).call(system_prompt, role_input)
 
             # Record step
             self.db.create_step(
@@ -478,7 +496,7 @@ class Dispatcher:
         # Write file
         os.makedirs(OUTPUT_DIR, exist_ok=True)
         # Clean summary for filename
-        safe_name = re.sub(r'[^\w\u4e00-\u9fff-]', '_', summary)[:30].strip('_')
+        safe_name = re.sub(r'[^\w\u4e00-\u9fff-]', '_', summary)[:80].strip('_')
         filename = f"{task_id}_{safe_name}.md"
         filepath = os.path.join(OUTPUT_DIR, filename)
 

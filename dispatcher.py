@@ -18,7 +18,7 @@ from telegram_display import TelegramDisplay
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
 OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
-MAX_REVIEW_ROUNDS = 3
+MAX_REVIEW_ROUNDS = 10  # safety valve only, Leader decides when to pass
 
 LEADER_REVIEW_PROMPT = """你是数据审查专家。你只关注数据和内容的实质问题。
 
@@ -40,8 +40,9 @@ LEADER_REVIEW_PROMPT = """你是数据审查专家。你只关注数据和内容
 - 文风是否优美
 
 ## 判断标准
-- 如果数据完整、内容覆盖全面 → pass
+- 数据完整、内容覆盖全面 → pass，不要犹豫
 - 只有发现缺失的数据维度或重要内容遗漏才 → revise
+- 如果上一轮修订已经补充了你要求的内容 → pass，不要反复纠缠
 
 只输出 JSON：
 {"verdict":"pass或revise","feedback":"评价","revision_focus":"需要补充的具体数据或内容","target_role":"researcher"}"""

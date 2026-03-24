@@ -20,32 +20,80 @@ OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
 MAX_REVIEW_ROUNDS = 2
 
-LEADER_REVIEW_PROMPT = """你是严格的审稿人。你的职责是找出产出中的不足，而不是夸奖。
+LEADER_REVIEW_PROMPT = """你是严格的质量审查专家。你的目标是找出问题，不是夸奖。
 
-审核标准（每项 1-10 分）：
-1. 完整性：是否覆盖了用户要求的所有方面
-2. 深度：分析是否有具体数据支撑，不是泛泛而谈
-3. 准确性：信息是否准确，逻辑链是否完整（论据→论点→结论）
-4. 可操作性：结论是否具体可执行，不是空话
+## 审查维度（必须逐项检查）
 
-规则：
-- 你必须找出至少 2 个可以改进的地方
-- 如果任一项低于 7 分，verdict 必须是 revise
-- 只有四项都 >= 7 分才能 pass
+### 1. 完整性检查
+- 是否回答了用户问题的所有方面？
+- 是否有明显的维度遗漏？（比如只讲了优势没讲风险）
+- 数据是否完整？（有时间、有来源、有对比）
+
+### 2. 准确性检查
+- 关键数字是否合理？（与常识对比）
+- 逻辑链是否完整？（论据→论点→结论）
+- 是否有明显的自相矛盾？
+
+### 3. 深度检查
+- 是否有"so what"分析？（不只是罗列信息）
+- 是否有独到的洞察？（不是百度能搜到的）
+- 是否有量化支撑？（百分比、倍数、排名）
+
+### 4. 可操作性检查
+- 结论是否明确？（不是"取决于具体情况"）
+- 建议是否可执行？（有具体步骤或标准）
+- 风险提示是否充分？
+
+## 评分标准（严格）
+- 9-10分：优秀，无明显缺陷
+- 7-8分：良好，有小问题但可以接受
+- 5-6分：及格，有明显缺陷需要修改
+- 1-4分：不合格，需要重写
+
+**重要规则**：
+- 大多数初稿应该被打回（revise），因为初稿总有改进空间
+- 如果找不到2个以上问题，说明你没有认真审查
+- 7分以下的维度必须打回
 
 只输出 JSON：
-{"verdict":"pass","scores":{"完整性":8,"深度":7,"准确性":8,"可操作性":7},"issues":["问题1","问题2"],"feedback":"总体评价"}
-或
-{"verdict":"revise","scores":{"完整性":6,"深度":5,"准确性":7,"可操作性":6},"issues":["问题1","问题2"],"feedback":"需要补充的内容","target_role":"researcher"}"""
+{"verdict":"pass或revise","scores":{"完整性":7,"准确性":8,"深度":6,"可操作性":7},"issues":[{"type":"深度","description":"缺少XX分析","suggestion":"补充XX对比"}],"revision_focus":"主要改进方向","target_role":"researcher"}"""
 
-ANALYSIS_PROMPT = """你是一个 JSON 任务分析器。你只输出 JSON，绝对不输出任何其他文字。
+ANALYSIS_PROMPT = """你是任务调度专家。分析用户需求，制定执行计划。
 
-分析用户任务，拆分为步骤，每步指定角色。
+## 可选角色
+- researcher: 调研、搜索、整理信息
+- analyst: 分析、评估、对比、量化
+- coder: 写代码、实现功能
+- reviewer: 审查、检查质量
+- architect: 架构设计、方案规划
 
-角色只有这5个: coder, reviewer, researcher, analyst, architect
+## 任务复杂度判断
 
-直接输出以下格式的JSON（不要markdown代码块，不要解释）：
-{"summary":"一句话总结","steps":[{"role":"coder","task":"具体描述"}]}"""
+1步任务：简单搜索（"查一下XX"）、简单代码（"写一个XX函数"）
+2步任务：包含"分析""评估""对比"等词，或调研+分析的组合
+3步任务：包含"深入""全面""详细"等词，或需要调研+分析+审核
+
+## 示例
+
+用户说："调研一下CPO产业链"
+任务总结：调研CPO光模块产业链现状和趋势
+步骤1：researcher - 深度调研CPO产业链的技术背景、核心玩家、市场规模
+
+用户说："分析AI芯片竞争格局和投资价值"
+任务总结：分析AI芯片竞争格局并评估投资价值
+步骤1：researcher - 调研AI芯片市场格局、主要玩家、技术路线
+步骤2：analyst - 基于调研结果分析竞争态势和投资价值
+
+用户说："写一个MACD函数然后review"
+任务总结：实现MACD计算函数并审查代码质量
+步骤1：coder - 编写MACD指标计算函数
+步骤2：reviewer - 审查代码质量和正确性
+
+## 输出格式（严格遵循，不要加其他内容）
+
+任务总结：[一句话]
+步骤1：[角色] - [具体任务]
+步骤2：[角色] - [具体任务]"""
 
 
 class Dispatcher:
@@ -69,29 +117,43 @@ class Dispatcher:
         self.display = TelegramDisplay(bot_tokens, group_id)
 
     def parse_dispatch_plan(self, raw_text):
-        """Parse k2p5's response into a dispatch plan. Returns None if invalid."""
+        """Parse k2p5's response into a dispatch plan. Supports both JSON and natural language format."""
+
+        # Try JSON first
         json_match = re.search(r'\{[\s\S]*\}', raw_text)
-        if not json_match:
-            return None
+        if json_match:
+            try:
+                plan = json.loads(json_match.group())
+                if isinstance(plan.get("steps"), list) and len(plan["steps"]) > 0:
+                    for step in plan["steps"]:
+                        if step.get("role") not in VALID_ROLES or not step.get("task"):
+                            break
+                    else:
+                        if len(plan["steps"]) > self.max_steps:
+                            plan["_truncated_from"] = len(plan["steps"])
+                            plan["steps"] = plan["steps"][:self.max_steps]
+                        return plan
+            except json.JSONDecodeError:
+                pass
 
-        try:
-            plan = json.loads(json_match.group())
-        except json.JSONDecodeError:
-            return None
+        # Try natural language format: "步骤N：角色 - 任务"
+        summary_match = re.search(r'任务总结[：:]\s*(.+)', raw_text)
+        step_matches = re.findall(r'步骤\d+[：:]\s*(\w+)\s*[-–—]\s*(.+)', raw_text)
 
-        if not isinstance(plan.get("steps"), list) or len(plan["steps"]) == 0:
-            return None
-
-        for step in plan["steps"]:
-            if step.get("role") not in VALID_ROLES:
-                return None
-            if not step.get("task"):
-                return None
-
-        # Cap steps with notification
-        if len(plan["steps"]) > self.max_steps:
-            plan["_truncated_from"] = len(plan["steps"])
-            plan["steps"] = plan["steps"][:self.max_steps]
+        if step_matches:
+            steps = []
+            for role, task in step_matches:
+                role = role.lower().strip()
+                if role in VALID_ROLES:
+                    steps.append({"role": role, "task": task.strip()})
+            if steps:
+                plan = {
+                    "summary": summary_match.group(1).strip() if summary_match else raw_text[:50],
+                    "steps": steps[:self.max_steps],
+                }
+                if len(step_matches) > self.max_steps:
+                    plan["_truncated_from"] = len(step_matches)
+                return plan
 
         return plan
 

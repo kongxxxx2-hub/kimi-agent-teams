@@ -1,6 +1,6 @@
 import re
 
-# Ordered list: first match wins
+# Role keyword patterns
 ROLE_RULES = [
     ("reviewer", re.compile(r"review|检查|审核|审查|校验|验证")),
     ("coder", re.compile(r"写|实现|脚本|代码|修改|重构|编写|开发|fix|bug|implement")),
@@ -9,15 +9,16 @@ ROLE_RULES = [
     ("architect", re.compile(r"设计|架构|方案|规划|design")),
 ]
 
-# Patterns that suggest multi-step: "do X then Y", "X后Y", "X完Y"
-MULTI_STEP_PATTERNS = [
-    re.compile(r"然后|之后|接着|再|完了|完后|写完后|做完后|, ?then"),
-]
+# Intent-based detection (replaces MULTI_STEP_PATTERNS + DEEP_WORK_KEYWORDS)
+INTENT_PATTERNS = {
+    "research_only": re.compile(r"^(查一下|搜索|找一下|了解一下|是什么|有哪些)"),
+    "research_analyze": re.compile(r"分析|评估|怎么样|趋势|前景|价值|走势"),
+    "research_analyze_compare": re.compile(r"对比|比较|哪个好|优劣势|竞争力|投资建议|竞争格局"),
+    "full_pipeline": re.compile(r"深入|深度|综合|全面|详细|系统梳理|综合判断|产业链"),
+    "implement_review": re.compile(r"然后.*review|然后.*检查|写完.*review|写完.*审查|做完.*检查"),
+}
 
-# Keywords that imply deep work → auto-trigger researcher + analyst (2-step)
-DEEP_WORK_KEYWORDS = re.compile(r"深入|深度|综合|全面|详细|产业链|竞争格局|投资|估值|对比分析|评估.*价值|分析.*趋势")
-
-DEFAULT_ROLE = "researcher"  # 默认用 researcher 而不是 coder
+DEFAULT_ROLE = "researcher"
 
 # Role-specific task enrichment templates
 ROLE_TASK_TEMPLATES = {
@@ -43,7 +44,14 @@ ROLE_TASK_TEMPLATES = {
 3. 多方案对比时用评分矩阵（1-10 分）
 4. 所有结论必须有数据支撑
 5. 结论放在最前面（倒金字塔结构）
-6. 附带风险提示""",
+6. 附带风险提示
+
+【前置产出处理】
+如果收到 Researcher 的调研报告：
+- 在其基础上进行深度分析，不要重复调研
+- 引用 Researcher 的关键数据时标注来源
+- 补充 Researcher 遗漏的分析维度
+- 开头说明：基于 Researcher 的调研结果，进行以下深度分析""",
 
     "reviewer": """请审查以下内容：
 
@@ -75,42 +83,44 @@ def _enrich_task(role, user_message):
 
 
 def fallback_dispatch(user_message):
-    """Return dispatch plan based on keyword matching.
-    Detects multi-step patterns like "写代码然后review".
-    Returns: single dict or list of dicts with role/task/fallback keys.
-    """
-    # Check if message contains multi-step indicators or deep work keywords
-    has_multi_step = any(p.search(user_message) for p in MULTI_STEP_PATTERNS)
-    has_deep_work = bool(DEEP_WORK_KEYWORDS.search(user_message))
+    """Intent-based task dispatch. Returns single dict or list of dicts."""
 
-    # Deep work keywords auto-trigger researcher + analyst
-    if has_deep_work and not has_multi_step:
+    # Full pipeline: researcher → analyst → reviewer
+    if INTENT_PATTERNS["full_pipeline"].search(user_message):
+        return [
+            {"role": "researcher", "task": _enrich_task("researcher", user_message), "fallback": True},
+            {"role": "analyst", "task": _enrich_task("analyst", user_message), "fallback": True},
+            {"role": "reviewer", "task": _enrich_task("reviewer", "审核最终产出的完整性和准确性"), "fallback": True},
+        ]
+
+    # Implement + review: coder → reviewer
+    if INTENT_PATTERNS["implement_review"].search(user_message):
+        return [
+            {"role": "coder", "task": _enrich_task("coder", user_message), "fallback": True},
+            {"role": "reviewer", "task": _enrich_task("reviewer", user_message), "fallback": True},
+        ]
+
+    # Compare/compete analysis: researcher → analyst
+    if INTENT_PATTERNS["research_analyze_compare"].search(user_message):
         return [
             {"role": "researcher", "task": _enrich_task("researcher", user_message), "fallback": True},
             {"role": "analyst", "task": _enrich_task("analyst", user_message), "fallback": True},
         ]
 
-    if has_multi_step:
-        # Find ALL matching roles in order of appearance in text
-        matched_roles = []
-        for role, pattern in ROLE_RULES:
-            match = pattern.search(user_message)
-            if match:
-                matched_roles.append((match.start(), role))
+    # Research + analyze: researcher → analyst
+    if INTENT_PATTERNS["research_analyze"].search(user_message):
+        return [
+            {"role": "researcher", "task": _enrich_task("researcher", user_message), "fallback": True},
+            {"role": "analyst", "task": _enrich_task("analyst", user_message), "fallback": True},
+        ]
 
-        if len(matched_roles) >= 2:
-            # Sort by position in text to get natural order
-            matched_roles.sort(key=lambda x: x[0])
-            seen = set()
-            steps = []
-            for _, role in matched_roles:
-                if role not in seen:
-                    seen.add(role)
-                    steps.append({"role": role, "task": _enrich_task(role, user_message), "fallback": True})
-            return steps
+    # Simple research only
+    if INTENT_PATTERNS["research_only"].search(user_message):
+        return {"role": "researcher", "task": _enrich_task("researcher", user_message), "fallback": True}
 
-    # Single step: first match wins
+    # Fallback: match by role keywords
     for role, pattern in ROLE_RULES:
         if pattern.search(user_message):
             return {"role": role, "task": _enrich_task(role, user_message), "fallback": True}
+
     return {"role": DEFAULT_ROLE, "task": _enrich_task(DEFAULT_ROLE, user_message), "fallback": True}

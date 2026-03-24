@@ -196,8 +196,8 @@ Bot Token 配置：
 
 | Bot | 用途 |
 |-----|------|
-| Bob (8418432363) | 私聊回复用户 |
-| AgentLeader (8665589291) | 群聊任务播报 |
+| Bob (<bot-id>) | 私聊回复用户 |
+| AgentLeader (<bot-id>) | 群聊任务播报 |
 | Coder bot | 群聊发 Coder 摘要 |
 | Reviewer bot | 群聊发 Reviewer 摘要 |
 | Researcher bot | 群聊发 Researcher 摘要 |

@@ -13,17 +13,18 @@ import re
 import signal
 import sys
 import time
+import fcntl
 
 import requests
 
-# Ensure project root is on path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dispatcher import Dispatcher
 
 MENTION_PATTERN = re.compile(r"@AgentLeader\w*", re.IGNORECASE)
-POLL_INTERVAL = 3  # seconds between getUpdates calls
 TELEGRAM_API = "https://api.telegram.org/bot{token}"
+LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", ".listener.lock")
+OFFSET_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", ".listener_offset")
 
 
 class TelegramListener:
@@ -33,14 +34,16 @@ class TelegramListener:
             self.config = json.load(f)
 
         self.leader_token = self.config["telegram"]["bots"]["leader"]["token"]
-        # Leader bot is no longer polled by clawdbot (binding removed), so we can use it directly
         self.poll_token = self.leader_token
         self.group_chat_id = int(self.config["telegram"]["group_chat_id"])
         self.once = once
         self.dry_run = dry_run
         self.running = True
-        self.offset = 0  # Telegram update offset
         self.start_time = int(time.time())
+        self.processed_ids = set()  # dedup: track processed update IDs
+
+        # Load persisted offset
+        self.offset = self._load_offset()
 
         self.dispatcher = Dispatcher(
             config_path=config_path,
@@ -49,12 +52,26 @@ class TelegramListener:
             roles_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "roles"),
         )
 
-        # Graceful shutdown
         signal.signal(signal.SIGTERM, self._shutdown)
         signal.signal(signal.SIGINT, self._shutdown)
 
+    def _load_offset(self):
+        """Load persisted offset from file."""
+        try:
+            with open(OFFSET_FILE) as f:
+                return int(f.read().strip())
+        except (FileNotFoundError, ValueError):
+            return 0
+
+    def _save_offset(self):
+        """Persist offset to file."""
+        os.makedirs(os.path.dirname(OFFSET_FILE), exist_ok=True)
+        with open(OFFSET_FILE, "w") as f:
+            f.write(str(self.offset))
+
     def _shutdown(self, signum, frame):
         print(f"[listener] Received signal {signum}, shutting down...")
+        self._save_offset()
         self.running = False
 
     def _get_updates(self):
@@ -93,7 +110,7 @@ class TelegramListener:
             return False
 
     def _extract_task(self, text):
-        """Remove @mention and return the task text. Returns None if empty."""
+        """Remove @mention and return the task text."""
         task = MENTION_PATTERN.sub("", text).strip()
         return task if task else None
 
@@ -103,17 +120,19 @@ class TelegramListener:
         if not msg:
             return False
 
-        # Must be from our group
+        # Dedup: skip already processed
+        update_id = update.get("update_id")
+        if update_id in self.processed_ids:
+            return False
+
         chat_id = msg.get("chat", {}).get("id")
         if chat_id != self.group_chat_id:
             return False
 
-        # Must have text
         text = msg.get("text", "")
         if not text:
             return False
 
-        # Must mention @AgentLeader
         if not MENTION_PATTERN.search(text):
             return False
 
@@ -126,14 +145,16 @@ class TelegramListener:
 
     def process_update(self, update):
         """Process a single relevant update."""
+        update_id = update["update_id"]
+        self.processed_ids.add(update_id)
+
         msg = update["message"]
         text = msg["text"]
         sender = msg.get("from", {}).get("first_name", "Unknown")
-        msg_id = msg.get("message_id", "?")
 
         task_text = self._extract_task(text)
         if not task_text:
-            print(f"[listener] Empty task from {sender} (msg {msg_id}), skipping")
+            print(f"[listener] Empty task from {sender}, skipping")
             return
 
         print(f"[listener] Task from {sender}: {task_text[:80]}")
@@ -141,65 +162,53 @@ class TelegramListener:
         try:
             result = self.dispatcher.execute(task_text)
 
-            # Send final summary back to group
             status = result.get("status", "unknown")
             task_id = result.get("task_id", "?")
-            steps = result.get("steps_completed", 0)
             output_path = result.get("output_path")
 
-            if status == "completed":
-                summary = f"任务 {task_id} 已完成 ({steps} 步)"
-            elif status == "partial":
-                summary = f"任务 {task_id} 部分完成 ({steps} 步)"
-            else:
-                summary = f"任务 {task_id} 失败"
-
+            summary = f"✅ 任务 {task_id} 已完成" if status == "completed" else f"❌ 任务 {task_id} {status}"
             if output_path:
                 summary += f"\n📁 {output_path}"
 
-            # Include a brief excerpt of the final output
-            final_output = result.get("final_output", "")
-            if final_output:
-                excerpt = final_output[:300]
-                if len(final_output) > 300:
-                    excerpt += "..."
-                summary += f"\n\n📝 最终产出摘要:\n{excerpt}"
-
             self._send_message(summary)
-            print(f"[listener] Task {task_id} finished with status: {status}")
+            print(f"[listener] Task {task_id} finished: {status}")
 
         except Exception as e:
-            error_msg = f"任务执行出错: {e}"
             print(f"[listener] Error: {e}", file=sys.stderr)
-            self._send_message(error_msg)
+            self._send_message(f"❌ 任务执行出错: {e}")
 
     def run(self):
         """Main loop: poll for updates and dispatch tasks."""
         print(f"[listener] Started at {self.start_time}, polling group {self.group_chat_id}")
         print(f"[listener] Mode: {'once' if self.once else 'daemon'}, dry_run: {self.dry_run}")
+        print(f"[listener] Persisted offset: {self.offset}")
 
-        # Consume existing updates to skip history
-        print("[listener] Consuming existing updates to skip history...")
-        initial_updates = self._get_updates()
-        if initial_updates:
-            self.offset = initial_updates[-1]["update_id"] + 1
-            print(f"[listener] Skipped {len(initial_updates)} existing updates, offset={self.offset}")
+        # If no persisted offset, consume existing updates to skip history
+        if self.offset == 0:
+            print("[listener] No persisted offset, consuming history...")
+            initial_updates = self._get_updates()
+            if initial_updates:
+                self.offset = initial_updates[-1]["update_id"] + 1
+                self._save_offset()
+                print(f"[listener] Skipped {len(initial_updates)} updates, offset={self.offset}")
 
         while self.running:
             updates = self._get_updates()
 
             for update in updates:
+                # Always advance offset FIRST (even if we skip the message)
                 self.offset = update["update_id"] + 1
+                self._save_offset()
 
                 if self._is_relevant(update):
                     self.process_update(update)
 
                     if self.once:
-                        print("[listener] --once mode, exiting after first task")
+                        print("[listener] --once mode, exiting")
                         return
 
             if not updates:
-                time.sleep(POLL_INTERVAL)
+                time.sleep(3)
 
 
 def main():
@@ -213,13 +222,25 @@ def main():
 
     os.makedirs(os.path.dirname(args.db) or ".", exist_ok=True)
 
+    # Single instance lock
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    lock_fd = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("[listener] Another instance is already running, exiting.")
+        sys.exit(1)
+
     listener = TelegramListener(
         config_path=args.config,
         db_path=args.db,
         dry_run=args.dry_run,
         once=args.once,
     )
-    listener.run()
+    try:
+        listener.run()
+    finally:
+        lock_fd.close()
 
 
 if __name__ == "__main__":

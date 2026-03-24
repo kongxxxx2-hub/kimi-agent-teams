@@ -188,30 +188,80 @@ class Dispatcher:
                 return f.read()
         return f"你是 {role}，请完成用户给你的任务。"
 
+    def _hard_rule_check(self, combined_output):
+        """Code-based quality checks. Returns list of issues found."""
+        issues = []
+        char_count = len(combined_output)
+        table_count = combined_output.count("|---") + combined_output.count("| ---")
+        has_data = bool(re.search(r'\d+[%％亿万]', combined_output))
+        has_blockquote = ">" in combined_output or ">" in combined_output
+
+        if char_count < 2000:
+            issues.append(f"内容过短（{char_count}字），期望 3000+ 字")
+        if table_count < 2:
+            issues.append(f"表格不足（{table_count}个），期望至少 3 个数据表格")
+        if not has_data:
+            issues.append("缺少量化数据（百分比、金额等）")
+        return issues
+
     def _leader_review(self, task_id, plan, combined_output):
         """Leader reviews combined output. Returns (passed, revised_steps_output)."""
         original_request = plan.get("_original_message", plan.get("summary", ""))
 
+        # Hard rule check first (code-based, 100% reliable)
+        hard_issues = self._hard_rule_check(combined_output)
+
         for review_round in range(1, MAX_REVIEW_ROUNDS + 1):
             review_input = (
                 f"原始任务: {original_request}\n\n"
-                f"计划: {json.dumps(plan.get('steps', []), ensure_ascii=False)}\n\n"
                 f"团队产出:\n{combined_output}"
             )
+
+            # Add hard rule issues to review context
+            if hard_issues and review_round == 1:
+                review_input += f"\n\n系统检测到的问题：\n" + "\n".join(f"- {i}" for i in hard_issues)
 
             result = self.client.call(LEADER_REVIEW_PROMPT, review_input)
 
             if result["status"] != "completed" or not result["text"]:
-                self.display.send("leader",
-                    f"🔄 审核 (第{review_round}轮): API 调用失败，视为通过",
-                    dry_run=self.dry_run)
-                return True, combined_output
+                # API failed — if hard rules passed, accept; otherwise revise
+                if hard_issues:
+                    self.display.send("leader",
+                        f"🔄 审核 (第{review_round}轮): API 失败，但内容有硬伤需修订",
+                        dry_run=self.dry_run)
+                    verdict = "revise"
+                    feedback = "；".join(hard_issues)
+                    target_role = "researcher"
+                else:
+                    self.display.send("leader",
+                        f"🔄 审核 (第{review_round}轮): API 失败，硬性规则通过",
+                        dry_run=self.dry_run)
+                    return True, combined_output
 
-            # Parse review JSON
-            json_match = re.search(r'\{[\s\S]*\}', result["text"])
-            if not json_match:
+            else:
+                # Parse review JSON
+                json_match = re.search(r'\{[\s\S]*\}', result["text"])
+                verdict = "revise"  # default to revise (not pass)
+                feedback = ""
+                target_role = "researcher"
+
+                if json_match:
+                    try:
+                        review = json.loads(json_match.group())
+                        verdict = review.get("verdict", "revise")
+                        feedback = review.get("feedback", review.get("revision_focus", ""))
+                        target_role = review.get("target_role", "researcher")
+                    except json.JSONDecodeError:
+                        feedback = "审核 JSON 解析失败，默认打回修订"
+
+                # Override: if hard rules have issues, force revise
+                if hard_issues and review_round == 1:
+                    verdict = "revise"
+                    feedback = "；".join(hard_issues) + ("；" + feedback if feedback else "")
+
+            if verdict == "pass":
                 self.display.send("leader",
-                    f"🔄 审核 (第{review_round}轮): 解析失败，视为通过",
+                    f"✅ 审核通过 (第{review_round}轮): {feedback[:100]}",
                     dry_run=self.dry_run)
                 return True, combined_output
 

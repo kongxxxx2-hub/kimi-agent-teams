@@ -239,8 +239,12 @@ def main():
     )
     try:
         listener.run()
+    except (KeyboardInterrupt, SystemExit):
+        pass
     finally:
+        listener._save_offset()
         lock_fd.close()
+        print("[listener] Exited cleanly.")
 
 
 if __name__ == "__main__":

@@ -342,17 +342,12 @@ class Dispatcher:
         return False, combined_output
 
     def analyze_task(self, user_message):
-        """Use k2p5 to analyze task and create dispatch plan. Falls back to keywords."""
-        result = self.client.call(ANALYSIS_PROMPT, user_message)
+        """Analyze task and create dispatch plan. Uses code-based intent detection directly.
 
-        if result["status"] == "completed" and result["text"]:
-            plan = self.parse_dispatch_plan(result["text"])
-            if plan:
-                return plan, False  # (plan, is_fallback)
-            # Log parse failure for debugging
-            print(f"[dispatcher] k2p5 分析返回但JSON解析失败, 前200字: {result['text'][:200]}", file=sys.stderr)
-
-        # Fallback
+        Note: k2p5 analysis was removed because it never succeeded — the model always
+        treated the analysis prompt as the actual task and produced a full report instead
+        of a dispatch plan. The intent-based fallback is more reliable and faster.
+        """
         fallback_result = fallback_dispatch(user_message)
         if isinstance(fallback_result, list):
             steps = fallback_result
@@ -376,9 +371,6 @@ class Dispatcher:
         self.display.send("leader", self.display.format_task_start(
             task_id, plan.get("summary", user_message[:50]), roles
         ), dry_run=self.dry_run)
-
-        if is_fallback:
-            self.display.send("leader", self.display.format_fallback_warning(), dry_run=self.dry_run)
 
         # Notify if plan was truncated
         if "_truncated_from" in plan:

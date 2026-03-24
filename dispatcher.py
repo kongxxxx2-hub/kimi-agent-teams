@@ -18,7 +18,7 @@ from telegram_display import TelegramDisplay
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
 OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
-MAX_REVIEW_ROUNDS = 2
+MAX_REVIEW_ROUNDS = 3
 
 LEADER_REVIEW_PROMPT = """你是严格的质量审查专家。你的目标是找出问题，不是夸奖。
 
@@ -118,6 +118,7 @@ class Dispatcher:
 
     def parse_dispatch_plan(self, raw_text):
         """Parse k2p5's response into a dispatch plan. Supports both JSON and natural language format."""
+        plan = None  # Initialize to avoid UnboundLocalError
 
         # Try JSON first
         json_match = re.search(r'\{[\s\S]*\}', raw_text)
@@ -155,7 +156,7 @@ class Dispatcher:
                     plan["_truncated_from"] = len(step_matches)
                 return plan
 
-        return plan
+        return None
 
     def read_context_files(self, file_paths):
         """Read files and return combined context string."""
@@ -422,23 +423,28 @@ class Dispatcher:
         if not steps:
             return None
 
-        # Build markdown
+        # Build clean markdown — only final content, no review process
         summary = plan.get("summary", task_id)
         lines = [f"# {summary}\n"]
-        lines.append(f"**任务ID**: {task_id}")
-        lines.append(f"**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-        lines.append(f"**步骤数**: {completed_steps}\n")
+        lines.append(f"**报告日期**: {datetime.now().strftime('%Y-%m-%d')}\n")
 
-        role_emoji = {"coder": "👨‍💻", "reviewer": "🔍", "researcher": "🔎",
-                      "analyst": "📊", "architect": "🏗️"}
+        # Find the final output: use the last completed step from a content role
+        # (researcher or analyst), ignoring reviewer steps and revision metadata
+        content_roles = {"researcher", "analyst", "coder", "architect"}
+        final_content = ""
+        for s in reversed(steps):
+            if s["status"] == "completed" and s["output"] and s["role"] in content_roles:
+                final_content = s["output"]
+                break
 
-        for s in steps:
-            if s["status"] != "completed" or not s["output"]:
-                continue
-            emoji = role_emoji.get(s["role"], "🤖")
-            lines.append(f"---\n\n## {emoji} {s['role'].capitalize()}\n")
-            lines.append(s["output"])
-            lines.append("")
+        if final_content:
+            lines.append(final_content)
+        else:
+            # Fallback: use the last completed step's output
+            for s in reversed(steps):
+                if s["status"] == "completed" and s["output"]:
+                    lines.append(s["output"])
+                    break
 
         # Write file
         os.makedirs(OUTPUT_DIR, exist_ok=True)

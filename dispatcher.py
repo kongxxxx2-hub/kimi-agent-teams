@@ -20,43 +20,31 @@ OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
 
 MAX_REVIEW_ROUNDS = 3
 
-LEADER_REVIEW_PROMPT = """你是严格的质量审查专家。你的目标是找出问题，不是夸奖。
+LEADER_REVIEW_PROMPT = """你是数据审查专家。你只关注数据和内容的实质问题。
 
-## 审查维度（必须逐项检查）
+## 你只审查这两类问题
 
-### 1. 完整性检查
-- 是否回答了用户问题的所有方面？
-- 是否有明显的维度遗漏？（比如只讲了优势没讲风险）
-- 数据是否完整？（有时间、有来源、有对比）
+### 1. 数据验证
+- 关键数字是否缺失或明显不合理？
+- 是否有重要数据没有标注来源或时间？
+- 是否有自相矛盾的数据？
 
-### 2. 准确性检查
-- 关键数字是否合理？（与常识对比）
-- 逻辑链是否完整？（论据→论点→结论）
-- 是否有明显的自相矛盾？
+### 2. 内容缺失
+- 用户要求的哪些方面没有覆盖？
+- 是否缺少重要的对比维度或关键玩家？
+- 是否缺少风险分析或趋势判断？
 
-### 3. 深度检查
-- 是否有"so what"分析？（不只是罗列信息）
-- 是否有独到的洞察？（不是百度能搜到的）
-- 是否有量化支撑？（百分比、倍数、排名）
+## 你不关心的（不要因为这些打回）
+- 语言表达、措辞、语气
+- 格式排版、标题层级
+- 文风是否优美
 
-### 4. 可操作性检查
-- 结论是否明确？（不是"取决于具体情况"）
-- 建议是否可执行？（有具体步骤或标准）
-- 风险提示是否充分？
-
-## 评分标准（严格）
-- 9-10分：优秀，无明显缺陷
-- 7-8分：良好，有小问题但可以接受
-- 5-6分：及格，有明显缺陷需要修改
-- 1-4分：不合格，需要重写
-
-**重要规则**：
-- 大多数初稿应该被打回（revise），因为初稿总有改进空间
-- 如果找不到2个以上问题，说明你没有认真审查
-- 7分以下的维度必须打回
+## 判断标准
+- 如果数据完整、内容覆盖全面 → pass
+- 只有发现缺失的数据维度或重要内容遗漏才 → revise
 
 只输出 JSON：
-{"verdict":"pass或revise","scores":{"完整性":7,"准确性":8,"深度":6,"可操作性":7},"issues":[{"type":"深度","description":"缺少XX分析","suggestion":"补充XX对比"}],"revision_focus":"主要改进方向","target_role":"researcher"}"""
+{"verdict":"pass或revise","feedback":"评价","revision_focus":"需要补充的具体数据或内容","target_role":"researcher"}"""
 
 ANALYSIS_PROMPT = """你是任务调度专家。分析用户需求，制定执行计划。
 
@@ -189,17 +177,16 @@ class Dispatcher:
         return f"你是 {role}，请完成用户给你的任务。"
 
     def _hard_rule_check(self, combined_output):
-        """Code-based quality checks. Returns list of issues found."""
+        """Code-based quality checks. Only checks data/content substance, not style."""
         issues = []
         char_count = len(combined_output)
         table_count = combined_output.count("|---") + combined_output.count("| ---")
         has_data = bool(re.search(r'\d+[%％亿万]', combined_output))
-        has_blockquote = ">" in combined_output or ">" in combined_output
 
-        if char_count < 2000:
-            issues.append(f"内容过短（{char_count}字），期望 3000+ 字")
-        if table_count < 2:
-            issues.append(f"表格不足（{table_count}个），期望至少 3 个数据表格")
+        if char_count < 1500:
+            issues.append(f"内容过短（{char_count}字），缺少实质内容")
+        if table_count < 1:
+            issues.append("缺少数据表格")
         if not has_data:
             issues.append("缺少量化数据（百分比、金额等）")
         return issues

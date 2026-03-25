@@ -1,100 +1,83 @@
-# Agent Teams
+# Kimi Agent Teams
 
-A multi-agent task dispatch system that orchestrates AI agents through Telegram, with automated research report generation.
+A multi-agent research system powered by [Kimi](https://kimi.ai) on Telegram. Send a task to your Agent Leader, and a team of specialized AI agents collaborates to produce publication-quality research reports.
 
-## What It Does
-
-Send a task to `@AgentLeader` in a Telegram group chat, and the system automatically:
-
-1. **Analyzes** the task and assigns it to the right agents
-2. **Executes** with specialized roles (Researcher, Analyst, Reviewer, etc.)
-3. **Reviews** the output through a Leader quality review loop
-4. **Produces** a clean PDF report saved to your desktop
-
-Each agent posts concise status updates to the group chat with their own bot avatar.
-
-## Architecture
+## How It Works
 
 ```
-User @AgentLeader in Telegram
-         ↓
-  Telegram Listener (Python)
-         ↓
-  Dispatcher (intent-based routing)
-         ↓
-  ┌──────────────┐
-  │ Role Agents  │  Each calls LLM via Gateway API
-  │ 🔎 Researcher │──→ Deep industry research
-  │ 📊 Analyst    │──→ Data analysis & evaluation
-  │ 🔍 Reviewer   │──→ Quality review
-  │ 👨‍💻 Coder     │──→ Code implementation
-  │ 🏗️ Architect  │──→ System design
-  └──────────────┘
-         ↓
-  👑 Leader Review Loop
-  (data validation + content completeness)
-         ↓
-  📁 Output: Markdown + PDF
+You: @AgentLeader 调研中国人形机器人产业链
+
+  📋 Leader assigns task
+       ↓
+  🔎 Researcher — searches the web, collects data, writes draft
+       ↓
+  📊 Analyst — evaluates data, adds quantitative analysis
+       ↓
+  🔍 Reviewer — checks completeness and accuracy
+       ↓
+  👑 Leader — reviews quality, sends back if needed
+       ↓
+  📁 Final report: Markdown + PDF
 ```
 
-## Smart Task Routing
+Each agent posts status updates to the Telegram group with their own bot avatar.
 
-The system uses intent-based detection to determine the right workflow — no LLM needed for routing:
+## Features
 
-| You Say | Workflow |
-|---------|----------|
-| "查一下 XX" (look up) | 🔎 Researcher |
-| "分析 XX 趋势" (analyze trends) | 🔎 Researcher → 📊 Analyst |
-| "对比 XX 竞争格局" (compare) | 🔎 Researcher → 📊 Analyst |
-| "深入调研 XX 产业链" (deep research) | 🔎 Researcher → 📊 Analyst → 🔍 Reviewer |
+- **Smart Routing** — Intent detection assigns the right agents automatically
+- **Multi-Agent Collaboration** — Researcher, Analyst, Reviewer, Coder, Architect
+- **Quality Review Loop** — Leader reviews output, sends back for revision until satisfied
+- **Search-Verified Reviews** — Leader must web-search to verify data before flagging errors
+- **PDF Reports** — Clean, styled reports with Chinese font support
+- **Persistent Listener** — Runs as a background service, always ready
+
+## Task Routing
+
+| You Say | Agents Activated |
+|---------|-----------------|
+| "查一下 XX" | 🔎 Researcher |
+| "分析 XX" | 🔎 Researcher → 📊 Analyst |
+| "对比 XX 竞争格局" | 🔎 Researcher → 📊 Analyst |
+| "深入调研 XX 产业链" | 🔎 Researcher → 📊 Analyst → 🔍 Reviewer |
 | "写代码然后 review" | 👨‍💻 Coder → 🔍 Reviewer |
-
-## Leader Review Loop
-
-After all agents complete their work, the Leader reviews the output:
-
-- Checks **data completeness** and **content coverage**
-- Ignores style/formatting (only substance matters)
-- Sends back for revision if key data or analysis is missing
-- No fixed round limit — passes when quality is met
 
 ## Setup
 
 ### Prerequisites
 
 - Python 3.10+
-- A Telegram bot (for the Leader) + optional role bots
-- [Clawdbot](https://clawdbot.com) or compatible LLM gateway
+- Telegram bots (one for Leader + optional per-role bots)
+- [OpenClaw](https://github.com/nicepkg/openclaw) or compatible LLM gateway with Kimi model
 
-### Installation
+### Install
 
 ```bash
-git clone https://github.com/kongxxxx2-hub/agent-teams.git
-cd agent-teams
+git clone https://github.com/kongxxxx2-hub/kimi-agent-teams.git
+cd kimi-agent-teams
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Configuration
+### Configure
 
-Copy `config.example.json` to `config.json` and fill in:
+Copy `config.example.json` to `config.json`:
 
 ```json
 {
   "gateway": {
     "url": "http://localhost:18789",
-    "token": "<your-gateway-token>"
+    "token": "<gateway-token>"
   },
   "telegram": {
-    "group_chat_id": "<your-group-chat-id>",
+    "group_chat_id": "<group-chat-id>",
     "bots": {
-      "leader": {"token": "<leader-bot-token>"},
-      "researcher": {"token": "<researcher-bot-token>"},
-      "analyst": {"token": "<analyst-bot-token>"},
-      "reviewer": {"token": "<reviewer-bot-token>"},
-      "coder": {"token": "<coder-bot-token>"},
-      "architect": {"token": "<architect-bot-token>"}
+      "leader": {"token": "<bot-token>"},
+      "researcher": {"token": "<bot-token>"},
+      "analyst": {"token": "<bot-token>"},
+      "reviewer": {"token": "<bot-token>"},
+      "coder": {"token": "<bot-token>"},
+      "architect": {"token": "<bot-token>"}
     }
   },
   "dispatcher": {
@@ -106,63 +89,53 @@ Copy `config.example.json` to `config.json` and fill in:
 }
 ```
 
-### Usage
+### Run
 
 ```bash
-# Start the Telegram listener (daemon mode)
-DYLD_LIBRARY_PATH=/opt/homebrew/lib venv/bin/python telegram_listener.py
+# Telegram listener (daemon)
+python telegram_listener.py
 
-# Or process one task and exit
-DYLD_LIBRARY_PATH=/opt/homebrew/lib venv/bin/python telegram_listener.py --once
-
-# Direct CLI usage (no Telegram)
-DYLD_LIBRARY_PATH=/opt/homebrew/lib venv/bin/python dispatcher.py "调研一下 CPO 产业链"
+# Single task (CLI)
+python dispatcher.py "调研 CPO 产业链"
 
 # View task history
-venv/bin/python show_task.py --list
-venv/bin/python show_task.py AT-20260324-001
-```
-
-## Output
-
-Reports are saved as Markdown + PDF to the configured output directory:
-
-```
-~/Desktop/AgentTeams_Output/
-├── AT-20260324-001_调研CPO产业链.md
-├── AT-20260324-001_调研CPO产业链.pdf
-├── AT-20260324-002_分析AI芯片竞争格局.md
-└── AT-20260324-002_分析AI芯片竞争格局.pdf
+python show_task.py --list
 ```
 
 ## Project Structure
 
 ```
-agent-teams/
-├── dispatcher.py          # Core orchestrator
-├── telegram_listener.py   # Telegram polling + auto-dispatch
+kimi-agent-teams/
+├── dispatcher.py          # Core orchestrator + Leader review loop
+├── telegram_listener.py   # Telegram polling daemon
 ├── gateway_client.py      # LLM Gateway API client
 ├── fallback.py            # Intent-based task routing
-├── telegram_display.py    # Group chat message formatting
+├── telegram_display.py    # Group chat formatting (per-role emoji)
 ├── db.py                  # SQLite task/step logging
 ├── show_task.py           # CLI task viewer
-├── roles/                 # Agent role prompts
-│   ├── researcher.md
-│   ├── analyst.md
-│   ├── reviewer.md
-│   ├── coder.md
-│   └── architect.md
+├── roles/                 # Agent system prompts
+│   ├── researcher.md      # Industry research specialist
+│   ├── analyst.md         # Data analysis & evaluation
+│   ├── reviewer.md        # Quality review
+│   ├── coder.md           # Code implementation
+│   └── architect.md       # System design
 ├── config.example.json
-├── requirements.txt
-└── data/                  # SQLite DB + listener state
+└── requirements.txt
 ```
+
+## Design Decisions
+
+- **Code-driven routing over LLM routing** — Kimi k2p5 couldn't reliably produce dispatch plans, so intent detection is pure Python regex. More reliable, faster, zero API calls wasted.
+- **Search-verified reviews** — Leader must web-search to verify data before flagging errors. Prevents the "reviewer changes correct data to wrong data" problem.
+- **Revision with re-search** — When revising, agents must re-search to verify feedback rather than blindly accepting review comments.
+- **Clean PDF output** — Final report contains only the last content role's output. No review process, no revision metadata.
 
 ## Roadmap
 
-- [ ] MCP Server integration (real-time data: stock prices, web search)
-- [ ] Debate mechanism (bullish/bearish Researchers)
-- [ ] Context summarization between steps
-- [ ] Launchd service for persistent listener
+- [ ] MCP Server integration for real-time data (stock prices, financial APIs)
+- [ ] Debate mechanism (bullish vs bearish Researchers)
+- [ ] Context summarization between agent steps
+- [ ] Support for additional LLM backends (Claude, GPT-4)
 
 ## License
 

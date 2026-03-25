@@ -22,54 +22,6 @@ def make_dispatcher(db_path):
                       roles_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)), "roles"))
 
 
-def test_parse_dispatch_plan_valid():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    try:
-        d = make_dispatcher(db_path)
-        plan_json = json.dumps({
-            "summary": "写代码并review",
-            "steps": [
-                {"role": "coder", "task": "写脚本"},
-                {"role": "reviewer", "task": "审查代码"}
-            ]
-        })
-        plan = d.parse_dispatch_plan(plan_json)
-        assert plan is not None
-        assert len(plan["steps"]) == 2
-        assert plan["steps"][0]["role"] == "coder"
-    finally:
-        os.unlink(db_path)
-
-
-def test_parse_dispatch_plan_invalid():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    try:
-        d = make_dispatcher(db_path)
-        assert d.parse_dispatch_plan("not json") is None
-        assert d.parse_dispatch_plan('{"steps":"not a list"}') is None
-        assert d.parse_dispatch_plan('{"steps":[{"role":"unknown","task":"x"}]}') is None
-    finally:
-        os.unlink(db_path)
-
-
-def test_parse_dispatch_plan_max_steps():
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-    try:
-        d = make_dispatcher(db_path)
-        plan_json = json.dumps({
-            "summary": "big task",
-            "steps": [{"role": "coder", "task": f"step {i}"} for i in range(10)]
-        })
-        plan = d.parse_dispatch_plan(plan_json)
-        assert len(plan["steps"]) == 5
-        assert plan["_truncated_from"] == 10
-    finally:
-        os.unlink(db_path)
-
-
 def test_read_context_files():
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         db_path = f.name
@@ -80,16 +32,44 @@ def test_read_context_files():
         d = make_dispatcher(db_path)
         context = d.read_context_files([tmp_file, "/nonexistent/file.py"])
         assert "hello" in context
-        # Nonexistent file should be silently skipped
         assert "nonexistent" not in context
     finally:
         os.unlink(db_path)
         os.unlink(tmp_file)
 
 
+def test_analyze_task():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        d = make_dispatcher(db_path)
+        plan, is_fallback = d.analyze_task("深入调研CPO产业链")
+        assert is_fallback is True
+        assert len(plan["steps"]) == 3  # researcher → analyst → reviewer
+        assert plan["steps"][0]["role"] == "researcher"
+    finally:
+        os.unlink(db_path)
+
+
+def test_hard_rule_check():
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+    try:
+        d = make_dispatcher(db_path)
+        # Short content should fail
+        issues = d._hard_rule_check("太短了")
+        assert len(issues) > 0
+
+        # Good content should pass
+        good = "这是一份报告" * 500 + "\n|---|---|\n| 数据 | 100亿 |"
+        issues = d._hard_rule_check(good)
+        assert len(issues) == 0
+    finally:
+        os.unlink(db_path)
+
+
 if __name__ == "__main__":
-    test_parse_dispatch_plan_valid()
-    test_parse_dispatch_plan_invalid()
-    test_parse_dispatch_plan_max_steps()
     test_read_context_files()
+    test_analyze_task()
+    test_hard_rule_check()
     print("All dispatcher tests passed")

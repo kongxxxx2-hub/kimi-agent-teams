@@ -233,6 +233,7 @@ def main():
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
+        lock_fd.close()
         print("[listener] Another instance is already running, exiting.")
         sys.exit(1)
 

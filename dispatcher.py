@@ -16,7 +16,7 @@ from fallback import fallback_dispatch
 from telegram_display import TelegramDisplay
 
 VALID_ROLES = {"coder", "reviewer", "researcher", "analyst", "architect"}
-OUTPUT_DIR = "~/Desktop/AgentTeams_Output"
+DEFAULT_OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "AgentTeams_Output")
 
 MAX_REVIEW_ROUNDS = 10  # safety valve only, Leader decides when to pass
 
@@ -59,43 +59,6 @@ LEADER_REVIEW_PROMPT = """你是审查专家。审核前必须先用搜索工具
 只输出 JSON：
 {"verdict":"pass或revise","feedback":"评价","revision_focus":"需要补充的具体数据或内容","target_role":"researcher"}"""
 
-ANALYSIS_PROMPT = """你是任务调度专家。分析用户需求，制定执行计划。
-
-## 可选角色
-- researcher: 调研、搜索、整理信息
-- analyst: 分析、评估、对比、量化
-- coder: 写代码、实现功能
-- reviewer: 审查、检查质量
-- architect: 架构设计、方案规划
-
-## 任务复杂度判断
-
-1步任务：简单搜索（"查一下XX"）、简单代码（"写一个XX函数"）
-2步任务：包含"分析""评估""对比"等词，或调研+分析的组合
-3步任务：包含"深入""全面""详细"等词，或需要调研+分析+审核
-
-## 示例
-
-用户说："调研一下CPO产业链"
-任务总结：调研CPO光模块产业链现状和趋势
-步骤1：researcher - 深度调研CPO产业链的技术背景、核心玩家、市场规模
-
-用户说："分析AI芯片竞争格局和投资价值"
-任务总结：分析AI芯片竞争格局并评估投资价值
-步骤1：researcher - 调研AI芯片市场格局、主要玩家、技术路线
-步骤2：analyst - 基于调研结果分析竞争态势和投资价值
-
-用户说："写一个MACD函数然后review"
-任务总结：实现MACD计算函数并审查代码质量
-步骤1：coder - 编写MACD指标计算函数
-步骤2：reviewer - 审查代码质量和正确性
-
-## 输出格式（严格遵循，不要加其他内容）
-
-任务总结：[一句话]
-步骤1：[角色] - [具体任务]
-步骤2：[角色] - [具体任务]"""
-
 
 class Dispatcher:
     def __init__(self, config_path="config.json", db_path="data/agent_teams.db",
@@ -111,6 +74,7 @@ class Dispatcher:
         disp = self.config["dispatcher"]
         self.max_steps = disp["max_steps"]
         self.max_context_bytes = disp["max_context_bytes"]
+        self.output_dir = disp.get("output_dir", DEFAULT_OUTPUT_DIR)
         timeout = disp["step_timeout_seconds"]
 
         # Per-role gateway clients with separate API keys (model names)
@@ -134,48 +98,6 @@ class Dispatcher:
     def _client_for(self, role):
         """Get the gateway client for a specific role."""
         return self.clients.get(role, self.client)
-
-    def parse_dispatch_plan(self, raw_text):
-        """Parse k2p5's response into a dispatch plan. Supports both JSON and natural language format."""
-        plan = None  # Initialize to avoid UnboundLocalError
-
-        # Try JSON first
-        json_match = re.search(r'\{[\s\S]*\}', raw_text)
-        if json_match:
-            try:
-                plan = json.loads(json_match.group())
-                if isinstance(plan.get("steps"), list) and len(plan["steps"]) > 0:
-                    for step in plan["steps"]:
-                        if step.get("role") not in VALID_ROLES or not step.get("task"):
-                            break
-                    else:
-                        if len(plan["steps"]) > self.max_steps:
-                            plan["_truncated_from"] = len(plan["steps"])
-                            plan["steps"] = plan["steps"][:self.max_steps]
-                        return plan
-            except json.JSONDecodeError:
-                pass
-
-        # Try natural language format: "步骤N：角色 - 任务"
-        summary_match = re.search(r'任务总结[：:]\s*(.+)', raw_text)
-        step_matches = re.findall(r'步骤\d+[：:]\s*(\w+)\s*[-–—]\s*(.+)', raw_text)
-
-        if step_matches:
-            steps = []
-            for role, task in step_matches:
-                role = role.lower().strip()
-                if role in VALID_ROLES:
-                    steps.append({"role": role, "task": task.strip()})
-            if steps:
-                plan = {
-                    "summary": summary_match.group(1).strip() if summary_match else raw_text[:50],
-                    "steps": steps[:self.max_steps],
-                }
-                if len(step_matches) > self.max_steps:
-                    plan["_truncated_from"] = len(step_matches)
-                return plan
-
-        return None
 
     def read_context_files(self, file_paths):
         """Read files and return combined context string."""
@@ -494,7 +416,7 @@ class Dispatcher:
                     break
 
         # Write file
-        os.makedirs(OUTPUT_DIR, exist_ok=True)
+        os.makedirs(self.output_dir, exist_ok=True)
         # Extract topic keywords for filename (remove filler words)
         topic = summary
         for filler in ["调研一下", "帮我看一下", "帮我", "看一下", "查一下", "分析一下",
@@ -506,7 +428,7 @@ class Dispatcher:
         if not topic:
             topic = summary[:20]
         filename = f"{task_id}_{topic}.md"
-        filepath = os.path.join(OUTPUT_DIR, filename)
+        filepath = os.path.join(self.output_dir, filename)
 
         with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))

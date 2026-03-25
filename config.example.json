@@ -18,7 +18,8 @@
   "dispatcher": {
     "model": "kimi-coding/k2p5",
     "max_steps": 5,
-    "step_timeout_seconds": 120,
-    "max_context_bytes": 153600
+    "step_timeout_seconds": 600,
+    "max_context_bytes": 153600,
+    "output_dir": "~/Desktop/AgentTeams_Output"
   }
 }

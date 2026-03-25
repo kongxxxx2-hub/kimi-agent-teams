@@ -6,7 +6,7 @@ Usage:
     venv/bin/python show_task.py --list              # 列出所有任务
 """
 import sys
-import json
+import sqlite3
 from db import Database
 
 
@@ -36,10 +36,9 @@ def show_task(db, task_id):
 
 
 def list_tasks(db):
-    import sqlite3
-    conn = sqlite3.connect(db.db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("SELECT task_id, status, user_message, created_at FROM tasks ORDER BY created_at DESC LIMIT 20").fetchall()
+    with sqlite3.connect(db.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT task_id, status, user_message, created_at FROM tasks ORDER BY created_at DESC LIMIT 20").fetchall()
     for r in rows:
         status_icon = {"completed": "✅", "failed": "❌", "running": "🔄", "partial": "⚠️"}.get(r["status"], "⏳")
         print(f"{status_icon} {r['task_id']}  {r['user_message'][:50]}  ({r['created_at']})")
@@ -55,10 +54,8 @@ def main():
         show_task(db, sys.argv[1])
         return
 
-    # 默认显示最近一条
-    import sqlite3
-    conn = sqlite3.connect(db.db_path)
-    row = conn.execute("SELECT task_id FROM tasks ORDER BY created_at DESC LIMIT 1").fetchone()
+    with sqlite3.connect(db.db_path) as conn:
+        row = conn.execute("SELECT task_id FROM tasks ORDER BY created_at DESC LIMIT 1").fetchone()
     if row:
         show_task(db, row[0])
     else:

@@ -6,7 +6,6 @@
   "telegram": {
     "group_chat_id": "<your-group-chat-id>",
     "bots": {
-      "private-bot": {"token": "<your-token>"},
       "leader": {"token": "<your-token>"},
       "coder": {"token": "<your-token>"},
       "reviewer": {"token": "<your-token>"},

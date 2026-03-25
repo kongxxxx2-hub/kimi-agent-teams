@@ -61,7 +61,7 @@ class TelegramDisplay:
 
         if not token or token == "TODO":
             token = leader_token
-            if role not in ("leader", "private-bot"):
+            if role != "leader":
                 text = f"[{role.capitalize()}] {text}"
 
         if not token:

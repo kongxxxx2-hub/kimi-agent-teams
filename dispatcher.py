@@ -495,9 +495,17 @@ class Dispatcher:
 
         # Write file
         os.makedirs(OUTPUT_DIR, exist_ok=True)
-        # Clean summary for filename
-        safe_name = re.sub(r'[^\w\u4e00-\u9fff-]', '_', summary)[:80].strip('_')
-        filename = f"{task_id}_{safe_name}.md"
+        # Extract topic keywords for filename (remove filler words)
+        topic = summary
+        for filler in ["调研一下", "帮我看一下", "帮我", "看一下", "查一下", "分析一下",
+                        "了解一下", "整理一下", "请", "然后", "以及", "还有", "关于",
+                        "最新", "最近", "一下", "相关的", "相关", "的", "每一个部分",
+                        "哪一个链条是", "再 focus 到", "再focus到"]:
+            topic = topic.replace(filler, "")
+        topic = re.sub(r'[^\w\u4e00-\u9fff-]', '', topic).strip()[:30]
+        if not topic:
+            topic = summary[:20]
+        filename = f"{task_id}_{topic}.md"
         filepath = os.path.join(OUTPUT_DIR, filename)
 
         with open(filepath, "w", encoding="utf-8") as f:

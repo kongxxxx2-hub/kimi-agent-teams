@@ -2,6 +2,8 @@
 
 A multi-agent research system powered by [Kimi](https://kimi.ai) on Telegram. Send a task to your Agent Leader, and a team of specialized AI agents collaborates to produce publication-quality research reports.
 
+> **中文简介**：基于 Kimi 大模型的多 Agent 协作调研系统。在 Telegram 群聊中 @AgentLeader 发送任务，系统自动调度 Researcher（调研员）、Analyst（分析师）、Reviewer（审核员）等角色分工协作，经过 Leader 质量审核循环后，自动生成 PDF 研究报告。支持产业链调研、个股分析、竞争格局对比等场景，产出质量对标券商研报。
+
 ## How It Works
 
 ```
